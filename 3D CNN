@@ -1,0 +1,135 @@
+import os
+import numpy as np
+import nibabel as nib
+from scipy.ndimage import zoom
+from sklearn.model_selection import train_test_split
+import tensorflow as tf
+from tensorflow.keras.models import Model
+from tensorflow.keras.layers import Input, Conv3D, MaxPooling3D, Flatten, Dense, Dropout
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.utils import to_categorical
+from tensorflow.keras.callbacks import ReduceLROnPlateau
+import time
+import matplotlib.pyplot as plt
+
+# ================================
+# CONFIGURATION SETTINGS
+# ================================
+DATA_DIR_FAILED = '/scratch/arnab/FreeSurfer_QC/failed_cases_output'
+DATA_DIR_PASSED = '/scratch/arnab/FreeSurfer_QC/passed_cases_output'
+OUTPUT_DIR = '/scratch/arnab/FreeSurfer_QC'
+
+TARGET_SHAPE = (64, 64, 64)  # Resize shape for MRI scans
+TEST_SPLIT = 0.2  # 20% test split
+RANDOM_SEED = 42
+BATCH_SIZE = 8
+EPOCHS = 10
+SAMPLE_SIZES = [50, 100, 150, 300]
+
+# ================================
+# FUNCTION: Load and Preprocess MRI Data
+# ================================
+def load_and_preprocess_mri(file_path, target_shape=TARGET_SHAPE):
+    """Loads an MRI scan, resizes it, normalizes it, and formats for CNN."""
+    img = nib.load(file_path)
+    mri_data = img.get_fdata()
+    
+    if mri_data.ndim != 3:
+        print(f"Skipping {file_path}: Expected 3D data, got {mri_data.ndim}D data")
+        return None
+
+    # Resizing to target shape
+    zoom_factors = [target_shape[i] / mri_data.shape[i] for i in range(3)]
+    mri_data_resampled = zoom(mri_data, zoom_factors, order=1)
+
+    # Normalizing to range [0,1]
+    normalized_data = (mri_data_resampled - np.min(mri_data_resampled)) / (np.max(mri_data_resampled) - np.min(mri_data_resampled))
+
+    # Expand dimensions for CNN input
+    return np.expand_dims(normalized_data, axis=-1)  # Shape: (64,64,64,1)
+
+# ================================
+# FUNCTION: Process and Save Data
+# ================================
+def process_and_save_data(ids, base_dir, label, output_dir):
+    """Processes MRI scans for a given list of subject IDs and saves them as .npy files."""
+    data = []
+    for i, case_id in enumerate(ids, start=1):
+        print(f"Processing {label} case {i} of {len(ids)}: ID {case_id}")
+        person_folder = os.path.join(base_dir, case_id)
+        file_path = os.path.join(person_folder, 'mri', 'brainmask.mgz')
+        
+        if os.path.exists(file_path):
+            preprocessed_data = load_and_preprocess_mri(file_path)
+            if preprocessed_data is not None:
+                data.append(preprocessed_data)
+        else:
+            print(f"  Missing brainmask.mgz for {label} case ID {case_id}")
+    
+    if data:
+        save_path = os.path.join(output_dir, f"{label}_data.npy")
+        np.save(save_path, np.array(data))
+        print(f"{label.capitalize()} data saved at {save_path}")
+    else:
+        print(f"No valid data processed for {label}.")
+
+# ================================
+# FUNCTION: Build 3D CNN Model
+# ================================
+def build_3d_cnn(input_shape):
+    """Defines and returns a 3D CNN model."""
+    input_layer = Input(shape=input_shape)
+    
+    x = Conv3D(32, (3, 3, 3), activation='relu', padding='same')(input_layer)
+    x = MaxPooling3D((2, 2, 2))(x)
+    x = Conv3D(64, (3, 3, 3), activation='relu', padding='same')(x)
+    x = MaxPooling3D((2, 2, 2))(x)
+    x = Conv3D(128, (3, 3, 3), activation='relu', padding='same')(x)
+    x = MaxPooling3D((2, 2, 2))(x)
+    
+    x = Flatten()(x)
+    x = Dense(256, activation='relu')(x)
+    x = Dropout(0.5)(x)
+    x = Dense(128, activation='relu')(x)
+    
+    output_layer = Dense(2, activation='softmax')(x)
+    
+    model = Model(inputs=input_layer, outputs=output_layer)
+    model.compile(optimizer=Adam(learning_rate=1e-4), loss='binary_crossentropy', metrics=['accuracy'])
+    return model
+
+# ================================
+# FUNCTION: Importance Sampling
+# ================================
+def importance_sample(X, y, sample_size, model):
+    """Performs importance sampling based on gradient magnitudes."""
+    importance_scores = np.zeros(len(X))
+    for i in range(len(X)):
+        with tf.GradientTape() as tape:
+            input_tensor = tf.convert_to_tensor(X[i:i+1], dtype=tf.float32)
+            tape.watch(input_tensor)
+            predictions = model(input_tensor)
+            loss = tf.keras.losses.categorical_crossentropy(y[i:i+1], predictions)
+        gradients = tape.gradient(loss, input_tensor)
+        importance_scores[i] = np.linalg.norm(gradients.numpy())
+    
+    probabilities = importance_scores / np.sum(importance_scores)
+    indices = np.random.choice(len(X), size=sample_size, replace=False, p=probabilities)
+    return X[indices], y[indices]
+
+# ================================
+# MAIN PROCESSING AND TRAINING PIPELINE
+# ================================
+if __name__ == "__main__":
+    print("\nTraining with Importance Sampling vs. Uniform Sampling")
+    model = build_3d_cnn((64, 64, 64, 1))
+    
+    results = {}
+    for sample_size in SAMPLE_SIZES:
+        print(f"\nTraining with sample size: {sample_size}")
+        X_sample, y_sample = importance_sample(X_train, y_train, sample_size, model)
+        history = model.fit(X_sample, y_sample, batch_size=BATCH_SIZE, epochs=EPOCHS, validation_data=(X_test, y_test))
+        
+        results[sample_size] = history.history
+    
+    print("Training complete. Model performance with different sampling strategies recorded.")
