@@ -1,0 +1,89 @@
+import os
+import numpy as np
+from sklearn.decomposition import PCA
+from sklearn.linear_model import LinearRegression
+from sklearn.svm import SVC
+from sklearn.metrics import accuracy_score
+from sklearn.model_selection import train_test_split
+import matplotlib.pyplot as plt
+
+# ================================
+# CONFIGURATION SETTINGS
+# ================================
+DATA_DIR = '/scratch/arnab/FreeSurfer_QC'
+TEST_SPLIT = 0.2  # 20% test split
+RANDOM_SEED = 42
+PCA_COMPONENTS = [10, 20, 50, 100, 200]  # Number of principal components to test
+
+# ================================
+# FUNCTION: Load Processed Data
+# ================================
+def load_data():
+    """Loads processed MRI data from .npy files."""
+    X_train_fail = np.load(f"{DATA_DIR}/train_fail_data.npy")
+    X_train_pass = np.load(f"{DATA_DIR}/train_pass_data.npy")
+    X_test_fail = np.load(f"{DATA_DIR}/test_fail_data.npy")
+    X_test_pass = np.load(f"{DATA_DIR}/test_pass_data.npy")
+    
+    X_train = np.concatenate((X_train_fail, X_train_pass), axis=0)
+    y_train = np.concatenate((np.zeros(X_train_fail.shape[0]), np.ones(X_train_pass.shape[0])), axis=0)
+    X_test = np.concatenate((X_test_fail, X_test_pass), axis=0)
+    y_test = np.concatenate((np.zeros(X_test_fail.shape[0]), np.ones(X_test_pass.shape[0])), axis=0)
+    
+    # Flatten images for PCA
+    X_train = X_train.reshape(X_train.shape[0], -1)
+    X_test = X_test.reshape(X_test.shape[0], -1)
+    
+    return X_train, y_train, X_test, y_test
+
+# ================================
+# FUNCTION: Apply PCA and Train Model
+# ================================
+def apply_pca_and_train(X_train, X_test, y_train, y_test, n_components, model, regression=False):
+    """Applies PCA, trains the given model, and evaluates accuracy."""
+    pca = PCA(n_components=n_components, random_state=RANDOM_SEED)
+    X_train_pca = pca.fit_transform(X_train)
+    X_test_pca = pca.transform(X_test)
+    
+    model.fit(X_train_pca, y_train)
+    y_pred = model.predict(X_test_pca)
+    
+    if regression:
+        y_pred = np.round(y_pred)  # Convert continuous predictions to binary classes
+    
+    accuracy = accuracy_score(y_test, y_pred)
+    return accuracy
+
+# ================================
+# MAIN PROCESSING AND TRAINING PIPELINE
+# ================================
+if __name__ == "__main__":
+    print("Loading data...")
+    X_train, y_train, X_test, y_test = load_data()
+    
+    svm_model = SVC(kernel='linear', random_state=RANDOM_SEED)
+    lr_model = LinearRegression()
+    
+    accuracies_svm = []
+    accuracies_lr = []
+    
+    for n_components in PCA_COMPONENTS:
+        print(f"\nTraining models with {n_components} PCA components...")
+        acc_svm = apply_pca_and_train(X_train, X_test, y_train, y_test, n_components, svm_model)
+        acc_lr = apply_pca_and_train(X_train, X_test, y_train, y_test, n_components, lr_model, regression=True)
+        
+        accuracies_svm.append(acc_svm)
+        accuracies_lr.append(acc_lr)
+    
+    # Plot results
+    plt.figure(figsize=(8, 6))
+    plt.plot(PCA_COMPONENTS, accuracies_svm, label='PCA + SVM', marker='o')
+    plt.plot(PCA_COMPONENTS, accuracies_lr, label='PCA + Linear Regression', marker='o')
+    plt.xlabel("Number of PCA Components")
+    plt.ylabel("Accuracy")
+    plt.title("PCA Component Selection vs Accuracy")
+    plt.legend()
+    plt.grid()
+    plt.show()
+    
+    print("Training complete. Accuracy results plotted.")
