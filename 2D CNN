@@ -1,0 +1,131 @@
+import os
+import numpy as np
+import nibabel as nib
+from scipy.ndimage import zoom
+from sklearn.model_selection import train_test_split
+import tensorflow as tf
+from tensorflow.keras.models import Model
+from tensorflow.keras.layers import Input, Conv2D, MaxPooling2D, Flatten, Dense, Dropout
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.utils import to_categorical
+import time
+import matplotlib.pyplot as plt
+
+# ================================
+# CONFIGURATION SETTINGS
+# ================================
+DATA_DIR_FAILED = '/scratch/arnab/FreeSurfer_QC/failed_cases_output'
+DATA_DIR_PASSED = '/scratch/arnab/FreeSurfer_QC/passed_cases_output'
+OUTPUT_DIR = '/scratch/arnab/FreeSurfer_QC'
+
+TARGET_SHAPE = (128, 128)  # Resize shape for 2D slices
+TEST_SPLIT = 0.2  # 20% test split
+RANDOM_SEED = 42
+BATCH_SIZE = 8
+EPOCHS = 10
+SAMPLE_SIZES = [50, 100, 150, 300]
+
+# ================================
+# FUNCTION: Load and Preprocess MRI Data (2D Slices)
+# ================================
+def load_and_preprocess_mri_2d(file_path, target_shape=TARGET_SHAPE):
+    """Loads an MRI scan, extracts 2D slices, resizes, normalizes, and formats for CNN."""
+    img = nib.load(file_path)
+    mri_data = img.get_fdata()
+    
+    if mri_data.ndim != 3:
+        print(f"Skipping {file_path}: Expected 3D data, got {mri_data.ndim}D data")
+        return None
+    
+    # Extracting middle slice along the axial plane (Z-axis)
+    mid_slice = mri_data[:, :, mri_data.shape[2] // 2]
+    
+    # Resizing to target shape
+    zoom_factors = [target_shape[i] / mid_slice.shape[i] for i in range(2)]
+    slice_resampled = zoom(mid_slice, zoom_factors, order=1)
+
+    # Normalizing to range [0,1]
+    normalized_data = (slice_resampled - np.min(slice_resampled)) / (np.max(slice_resampled) - np.min(slice_resampled))
+
+    # Expand dimensions for CNN input
+    return np.expand_dims(normalized_data, axis=-1)  # Shape: (128,128,1)
+
+# ================================
+# FUNCTION: Process and Save Data
+# ================================
+def process_and_save_data_2d(ids, base_dir, label, output_dir):
+    """Processes 2D MRI slices for given subject IDs and saves them as .npy files."""
+    data = []
+    for i, case_id in enumerate(ids, start=1):
+        print(f"Processing {label} case {i} of {len(ids)}: ID {case_id}")
+        person_folder = os.path.join(base_dir, case_id)
+        file_path = os.path.join(person_folder, 'mri', 'brainmask.mgz')
+        
+        if os.path.exists(file_path):
+            preprocessed_data = load_and_preprocess_mri_2d(file_path)
+            if preprocessed_data is not None:
+                data.append(preprocessed_data)
+        else:
+            print(f"  Missing brainmask.mgz for {label} case ID {case_id}")
+    
+    if data:
+        save_path = os.path.join(output_dir, f"{label}_data.npy")
+        np.save(save_path, np.array(data))
+        print(f"{label.capitalize()} data saved at {save_path}")
+    else:
+        print(f"No valid data processed for {label}.")
+
+# ================================
+# FUNCTION: Build 2D CNN Model
+# ================================
+def build_2d_cnn(input_shape):
+    """Defines and returns a 2D CNN model."""
+    input_layer = Input(shape=input_shape)
+    
+    x = Conv2D(32, (3, 3), activation='relu', padding='same')(input_layer)
+    x = MaxPooling2D((2, 2))(x)
+    x = Conv2D(64, (3, 3), activation='relu', padding='same')(x)
+    x = MaxPooling2D((2, 2))(x)
+    x = Conv2D(128, (3, 3), activation='relu', padding='same')(x)
+    x = MaxPooling2D((2, 2))(x)
+    
+    x = Flatten()(x)
+    x = Dense(256, activation='relu')(x)
+    x = Dropout(0.5)(x)
+    x = Dense(128, activation='relu')(x)
+    
+    output_layer = Dense(2, activation='softmax')(x)
+    
+    model = Model(inputs=input_layer, outputs=output_layer)
+    model.compile(optimizer=Adam(learning_rate=1e-4), loss='binary_crossentropy', metrics=['accuracy'])
+    return model
+
+# ================================
+# MAIN PROCESSING AND TRAINING PIPELINE
+# ================================
+if __name__ == "__main__":
+    print("\nProcessing 2D slices...")
+    fail_ids = [name for name in os.listdir(DATA_DIR_FAILED) if os.path.isdir(os.path.join(DATA_DIR_FAILED, name))]
+    train_fail_ids, test_fail_ids = train_test_split(fail_ids, test_size=TEST_SPLIT, random_state=RANDOM_SEED)
+    process_and_save_data_2d(train_fail_ids, DATA_DIR_FAILED, label='train_fail', output_dir=OUTPUT_DIR)
+    process_and_save_data_2d(test_fail_ids, DATA_DIR_FAILED, label='test_fail', output_dir=OUTPUT_DIR)
+    
+    pass_ids = [name for name in os.listdir(DATA_DIR_PASSED) if os.path.isdir(os.path.join(DATA_DIR_PASSED, name))]
+    train_pass_ids, test_pass_ids = train_test_split(pass_ids, test_size=TEST_SPLIT, random_state=RANDOM_SEED)
+    process_and_save_data_2d(train_pass_ids, DATA_DIR_PASSED, label='train_pass', output_dir=OUTPUT_DIR)
+    process_and_save_data_2d(test_pass_ids, DATA_DIR_PASSED, label='test_pass', output_dir=OUTPUT_DIR)
+    
+    print("\nLoading processed data...")
+    X_train = np.concatenate((np.load(f"{OUTPUT_DIR}/train_fail_data.npy"), np.load(f"{OUTPUT_DIR}/train_pass_data.npy")))
+    y_train = np.concatenate((np.zeros(len(np.load(f"{OUTPUT_DIR}/train_fail_data.npy"))), np.ones(len(np.load(f"{OUTPUT_DIR}/train_pass_data.npy")))))
+    X_test = np.concatenate((np.load(f"{OUTPUT_DIR}/test_fail_data.npy"), np.load(f"{OUTPUT_DIR}/test_pass_data.npy")))
+    y_test = np.concatenate((np.zeros(len(np.load(f"{OUTPUT_DIR}/test_fail_data.npy"))), np.ones(len(np.load(f"{OUTPUT_DIR}/test_pass_data.npy")))))
+    
+    y_train = to_categorical(y_train, num_classes=2)
+    y_test = to_categorical(y_test, num_classes=2)
+    
+    print("\nTraining 2D CNN...")
+    model = build_2d_cnn(X_train.shape[1:])
+    model.fit(X_train, y_train, batch_size=BATCH_SIZE, epochs=EPOCHS, validation_data=(X_test, y_test))
+    
+    print("Training complete. Model is ready for evaluation and testing.")
