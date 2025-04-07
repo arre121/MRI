@@ -1,0 +1,266 @@
+import pandas as pd
+
+# Step 1: Load the datasets
+fsqc5000_path = r'C:\Users\arnab\Desktop\MASTER\Exjobb\results\fsqc5000.csv'  # Replace with the correct path
+fsqc1000_path = r'C:\Users\arnab\Desktop\MASTER\Exjobb\results\fsqc1000_with_verdict.csv'  # Replace with the correct path
+
+fsqc5000 = pd.read_csv(fsqc5000_path, delimiter=';')
+fsqc1000 = pd.read_csv(fsqc1000_path, delimiter=';')
+
+# Step 2: Analyze fsqc5000 to compute mean and standard deviation for each metric
+metrics = ['wm_snr_orig', 'gm_snr_orig', 'wm_snr_norm', 'gm_snr_norm', 
+           'cc_size', 'holes_lh', 'holes_rh', 'defects_lh', 'defects_rh', 
+           'topo_lh', 'topo_rh', 'con_snr_lh', 'con_snr_rh', 
+           'rot_tal_x', 'rot_tal_y', 'rot_tal_z']
+
+stats = {metric: {'mean': fsqc5000[metric].mean(), 'std': fsqc5000[metric].std()} for metric in metrics}
+
+# Step 3: Build the composition formula with penalties for outliers
+penalty = 1.5  # Penalty for each outlier
+weights = {
+    'holes_lh': 0.7, 'holes_rh': 0.4,
+    'defects_lh': 0.7, 'defects_rh': 0.4,
+    'cc_size': 0.1, 'topo_lh': 0.05, 'topo_rh': 0.05,
+    'wm_snr_orig': 0.05, 'gm_snr_orig': 0.05,
+    'wm_snr_norm': 0.05, 'gm_snr_norm': 0.05,
+    'con_snr_lh': 0.05, 'con_snr_rh': 0.05,
+    'rot_tal_x': 0.025, 'rot_tal_y': 0.025, 'rot_tal_z': 0.025
+}
+
+
+
+
+def calculate_composite_score(row, stats, weights):
+    score = 0
+    penalties = 0
+    for metric, weight in weights.items():
+        value = row[metric]
+        mean = stats[metric]['mean']
+        std = stats[metric]['std']
+        # Add metric contribution to score
+        score += weight * value
+        # Apply penalty if outlier
+        if value < (mean - 2 * std) or value > (mean + 2 * std):
+            penalties += penalty
+    return score - penalties
+
+fsqc1000['composite_score'] = fsqc1000.apply(calculate_composite_score, axis=1, stats=stats, weights=weights)
+
+# Step 4: Classify cases based on composite score
+pass_threshold = fsqc1000['composite_score'].quantile(0.30)
+fsqc1000['predicted_verdict'] = fsqc1000['composite_score'].apply(
+    lambda x: 'Pass' if x >= pass_threshold else 'Fail'
+)
+
+# Step 5: Compare predictions to ground truth
+ground_truth_col = 'random_verdict'  # This matches the column name in your data
+fsqc1000['ground_truth'] = fsqc1000[ground_truth_col]
+
+
+# Calculate metrics
+from sklearn.metrics import accuracy_score, classification_report
+
+y_true = fsqc1000['ground_truth']
+y_pred = fsqc1000['predicted_verdict']
+
+accuracy = accuracy_score(y_true, y_pred)
+report = classification_report(y_true, y_pred)
+
+print(f"Accuracy: {accuracy:.2f}")
+print("Classification Report:")
+print(report)
+
+
+#import matplotlib.pyplot as plt
+#fsqc1000[fsqc1000['ground_truth'] == 'Fail']['composite_score'].plot(kind='kde', label='Fail', alpha=0.7)
+#fsqc1000[fsqc1000['ground_truth'] == 'Pass']['composite_score'].plot(kind='kde', label='Pass', alpha=0.7)
+#plt.legend()
+#plt.xlabel("Composite Score")
+#plt.ylabel("Density")
+#plt.title("Composite Score Distribution by Ground Truth")
+#plt.show()
+
+from sklearn.metrics import precision_recall_curve
+
+#precision, recall, thresholds = precision_recall_curve(y_true, fsqc1000['composite_score'], pos_label='Fail')
+#plt.plot(recall, precision, marker='.')
+#plt.xlabel("Recall")
+#plt.ylabel("Precision")
+#plt.title("Precision-Recall Curve for 'Fail'")
+#plt.show()
+
+
+ground_truth_counts = fsqc1000['ground_truth'].value_counts()
+predicted_counts = fsqc1000['predicted_verdict'].value_counts()
+
+df_counts = pd.DataFrame({'Ground Truth': ground_truth_counts, 'Predicted': predicted_counts})
+df_counts.plot(kind='bar')
+plt.title("Comparison of Ground Truth and Predicted Counts")
+plt.ylabel("Count")
+plt.xlabel("Verdict")
+plt.xticks(rotation=0)
+plt.savefig("C:/Users/arnab/Downloads/Comparison.png")
+
+plt.show()
+
+
+fsqc1000[fsqc1000['ground_truth'] == 'Fail']['composite_score'].plot(kind='kde', label='Fail', alpha=0.7)
+fsqc1000[fsqc1000['ground_truth'] == 'Pass']['composite_score'].plot(kind='kde', label='Pass', alpha=0.7)
+plt.xlim(fsqc1000['composite_score'].min(), fsqc1000['composite_score'].max())  # Explicit x-axis range
+plt.legend()
+plt.xlabel("Composite Score")
+plt.ylabel("Density")
+plt.title("Composite Score Distribution by Ground Truth")
+plt.savefig("C:/Users/arnab/Downloads/Ground_truth.png")
+
+plt.show()
+
+
+print(fsqc1000['composite_score'].describe())
+print(f"Minimum Score: {fsqc1000['composite_score'].min()}")
+print(f"Maximum Score: {fsqc1000['composite_score'].max()}")
+
+import pandas as pd
+
+# Load the dataset
+file_path = r'C:\Users\arnab\Desktop\MASTER\Exjobb\results\fsqc-results.csv'
+data = pd.read_csv(file_path, delimiter=';')
+
+# Step 1: Calculate the mean and standard deviation for each metric
+metrics = ['wm_snr_orig', 'gm_snr_orig', 'wm_snr_norm', 'gm_snr_norm', 
+           'cc_size', 'holes_lh', 'holes_rh', 'defects_lh', 'defects_rh', 
+           'topo_lh', 'topo_rh', 'con_snr_lh', 'con_snr_rh', 
+           'rot_tal_x', 'rot_tal_y', 'rot_tal_z']
+
+stats = {metric: {'mean': data[metric].mean(), 'std': data[metric].std()} for metric in metrics}
+
+# Step 2: Flag outliers based on the ±2 SD rule
+def flag_outliers(row, metric, mean, std):
+    value = row[metric]
+    if value < (mean - 2 * std) or value > (mean + 2 * std):
+        return 1  # Outlier
+    return 0  # Normal
+
+for metric in metrics:
+    mean = stats[metric]['mean']
+    std = stats[metric]['std']
+    data[f'{metric}_outlier'] = data.apply(flag_outliers, axis=1, metric=metric, mean=mean, std=std)
+
+# Step 3: Compute the initial composite score with equal weights
+# Define equal weights: 1 / M for each metric
+M = len(metrics)  # Total number of metrics
+equal_weight = 1 / M
+weights = {metric: equal_weight for metric in metrics}
+
+# Compute composite score
+data['composite_score'] = sum(weights[metric] * data[metric] for metric in metrics)
+
+# Step 4: Adjust the composite score by penalizing for outliers
+penalty = 0.1  # Define penalty for each outlier
+data['adjusted_composite_score'] = data['composite_score'] - penalty * sum(data[f'{metric}_outlier'] for metric in metrics)
+
+# Step 5: Classify subjects based on thresholds
+def classify_subject(score):
+    if score > 0.8:
+        return 'Pass'
+    elif 0.6 <= score <= 0.8:
+        return 'Questionable'
+    else:
+        return 'Fail'
+
+data['classification'] = data['adjusted_composite_score'].apply(classify_subject)
+
+# Display the results
+print(data[['subject', 'composite_score', 'adjusted_composite_score', 'classification']].head())
+
+# Initial weights
+weights = {
+    'wm_snr_orig': 0.025,
+    'gm_snr_orig': 0.025,
+    'wm_snr_norm': 0.025,
+    'gm_snr_norm': 0.025,
+    'cc_size': 0.05,
+    'holes_lh': 0.2,  # Increased
+    'holes_rh': 0.2,  # Increased
+    'defects_lh': 0.2,  # Increased
+    'defects_rh': 0.2,  # Increased
+    'topo_lh': 0.05,
+    'topo_rh': 0.05,
+    'con_snr_lh': 0.05,
+    'con_snr_rh': 0.05,
+    'rot_tal_x': 0.005,  # Decreased
+    'rot_tal_y': 0.005,  # Decreased
+    'rot_tal_z': 0.005   # Decreased
+}
+
+# Thresholds
+pass_threshold = 0.6  # Initial threshold for Pass
+fail_threshold = 0.2  # Initial threshold for Fail
+
+# Penalty factor
+penalty = 0.1  # Penalty for outliers
+
+# Maximum iterations
+max_iterations = 600
+
+# Update weights dynamically during each iteration
+iteration = 0
+while iteration < max_iterations:
+    iteration += 1
+
+    # Adjust weights dynamically every 5 iterations
+    if iteration % 5 == 0:
+        weights['holes_lh'] += 0.05
+        weights['holes_rh'] += 0.05
+        weights['defects_lh'] += 0.05
+        weights['defects_rh'] += 0.05
+        weights['rot_tal_x'] = max(0, weights['rot_tal_x'] - 0.01)
+        weights['rot_tal_y'] = max(0, weights['rot_tal_y'] - 0.01)
+        weights['rot_tal_z'] = max(0, weights['rot_tal_z'] - 0.01)
+
+    # Lower fail threshold aggressively every 10 iterations
+    if iteration % 10 == 0:
+        fail_threshold -= 0.01
+
+    # Compute composite score
+    data['composite_score'] = sum(weights[metric] * data[metric] for metric in weights.keys())
+
+    # Normalize the score
+    data['normalized_score'] = (data['composite_score'] - data['composite_score'].min()) / \
+                               (data['composite_score'].max() - data['composite_score'].min())
+
+    # Penalize for outliers
+    data['adjusted_normalized_score'] = data['normalized_score'] - penalty * data[
+        [f'{metric}_outlier' for metric in weights.keys()]].sum(axis=1)
+
+    # Classification logic
+    def classify_subject(score):
+        if score >= pass_threshold:
+            return 'Pass'
+        elif score < fail_threshold:
+            return 'Fail'
+        else:
+            return 'Questionable'
+
+    data['predicted_classification'] = data['adjusted_normalized_score'].apply(classify_subject)
+
+    # Evaluate performance
+    y_true = data['random_verdict']
+    y_pred = data['predicted_classification']
+
+    accuracy = accuracy_score(y_true, y_pred)
+    f1_fail = f1_score(y_true, y_pred, labels=['Fail'], average='weighted', zero_division=1)
+    f1_pass = f1_score(y_true, y_pred, labels=['Pass'], average='weighted', zero_division=1)
+
+    print(f"Iteration {iteration} -> Accuracy: {accuracy:.2f}, F1 Fail: {f1_fail:.2f}, F1 Pass: {f1_pass:.2f}")
+
+    # Stop if convergence criteria are met
+    if accuracy >= 0.70 and f1_fail > 0.10 and f1_pass > 0.70:
+        print("Optimal solution achieved!")
+        break
+
+    # Dynamically adjust penalty to emphasize outliers
+    penalty += 0.005
+
+# Stop message
+print("Maximum iterations reached or convergence achieved.")
