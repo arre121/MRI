@@ -22,9 +22,27 @@ standardizing all input scans. This includes:
 
 Loading volumes using Nibabel (nib.load) from brainmask.mgz files.
 Resampling the 3D volumes to a consistent shape of 128×128×128, ensuring compatibility across the dataset.
-Normalizing voxel intensities to the [0, 1] range to reduce variability and improve model convergence.
+Normalizing voxel intensities to the [0,1] range to reduce variability and improve model convergence.
 
 After preprocessing, the dataset is split into an 80/20 train-test split, and the appropriate model is trained and evaluated. You can run each method 
 individually by navigating to the relevant script folder, e.g. 3D CNN, PCA, etc.
+
+For the deepMI method you need csv files of the MRI scans which needs to have been preprocessed by FreeSurfer. The csv files need to have the following data:
+wm snr orig
+gm snr orig 
+wm snr norm
+gm snr norm
+cc size
+lh holes
+rh holes 
+lh defects
+rh defects
+rot tal x 
+rot tal y
+rot tal z
+
+These are the metrics used for the scoring system. When inputting the csv file into code 
+the method produces quantitative and visual summaries. 
+
 
 
